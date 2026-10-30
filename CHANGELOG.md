@@ -10,7 +10,23 @@ the public-API contract.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **A short forward seek on a link near the media bitrate no longer waits for the producer to play the gap in real time.**
+  A target 1 to 8 segments past the producer's front always waited for the march (`forwardWaitWindow`), and a march
+  can only advance at the link rate, so a +30 s seek on a 74 Mbps link to a 71.5 Mbps remux took 27 to 34 s while a
+  +60 s seek (a restart at the target) resumed in 4 to 5 s. A forward jump now waits only while the measured march
+  rate reaches the target sooner than the last measured restart did, and restarts at the target otherwise; the
+  segment being written is always waited for, and sequential playback (the next segment, or a retry of the same
+  one) is never treated as a jump. Measured on an Apple TV 4K at about 70 Mbps: +30 s from 39 to 53 s down to 6 to
+  12 s, five +10 s presses from 30 s to 8 s; on a 275 Mbps link nothing changes.
+- **A jump right after a restart no longer parks on the old march.** Until the restarted producer sealed its first
+  segment, the highest sealed index still belonged to the producer before, so a target past it by more than the
+  window took the out-of-range restart, and `activeProducerCovers` (reading the new producer's base) vetoed it: the
+  request rode the march instead (20.5 s for one press of a remote burst). The march-rate decision now covers that
+  branch too and lifts the veto when it chooses the restart.
+- **A burst of remote presses restarts the producer at the first press and then once, at the last.** A press within
+  1.5 s of a jump to another index holds its restart for 0.7 s and drops it when a newer target arrives.
 
 ## [7.50.0] - 2026-10-28
 

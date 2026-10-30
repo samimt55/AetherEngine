@@ -81,6 +81,9 @@ final class SegmentCache: @unchecked Sendable {
     private var initVersions: [(versionID: Int, fromSegment: Int, data: Data)] = []
 
     private var closed = false
+    /// (index, bytes) of every segment the producer completes, for the provider's
+    /// march-rate estimate. Guarded by `condition`, called after it is released.
+    private var storeObserver: (@Sendable (Int, Int) -> Void)?
     private var _producerParked = false
     private var _evictionCount = 0
     private var _lastFailure: SessionCacheFailureReason?
@@ -405,11 +408,13 @@ final class SegmentCache: @unchecked Sendable {
         }
         let doomed = pruneOutsideWindow()
         if !doomed.isEmpty { residentSetChanged = true }
+        let observer = storeObserver
         condition.broadcast()
         condition.unlock()
         if let supersededFile { try? FileManager.default.removeItem(at: supersededFile) }
         for url in doomed { try? FileManager.default.removeItem(at: url) }
         if residentSetChanged { onResidentSetChanged?() }
+        if writeOK { observer?(index, data.count) }
         return writeOK
     }
 
@@ -476,11 +481,13 @@ final class SegmentCache: @unchecked Sendable {
         }
         let doomed = pruneOutsideWindow()
         if !doomed.isEmpty { residentSetChanged = true }
+        let observer = storeObserver
         condition.broadcast()
         condition.unlock()
         if let supersededFile { try? FileManager.default.removeItem(at: supersededFile) }
         for url in doomed { try? FileManager.default.removeItem(at: url) }
         if residentSetChanged { onResidentSetChanged?() }
+        if renameOK { observer?(index, byteCount) }
         return renameOK
     }
 
@@ -994,6 +1001,13 @@ final class SegmentCache: @unchecked Sendable {
 
     /// Reset before triggering a restart; previous producer's highWater would keep producerPassedAndPruned
     /// hot on every fetch, cascading a single restart into a per-segment storm.
+    /// See `storeObserver`.
+    func setStoreObserver(_ observer: (@Sendable (Int, Int) -> Void)?) {
+        condition.lock()
+        storeObserver = observer
+        condition.unlock()
+    }
+
     func resetHighWaterForRestart() {
         condition.lock()
         defer { condition.unlock() }
